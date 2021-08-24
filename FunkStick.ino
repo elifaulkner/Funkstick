@@ -1,6 +1,5 @@
 
 
-//#include <TCA9548A.h>
 #include <Wire.h>
 #include <ESPRotary.h>
 #include <LiquidCrystal_I2C.h>
@@ -29,6 +28,9 @@ boolean selectionPressed = false;
 boolean joystickPressed = false;
 int tick = 0;
 boolean dirty = true;
+int joystickButtonCount = 0;
+int buttonNote = 0;
+boolean noteOn = false;
 
 void setup() {
   Serial.begin(115200);
@@ -79,7 +81,7 @@ void loop() {
 
   tick = (tick + 1) % 100;
   if(tick == 0) {
-    printPosition(x, y, z);
+    //printPosition(x, y, z);
   }
 
   setCCValues(x, y, z);
@@ -114,7 +116,8 @@ void dirtySetValue(int index, int newValue, int minIncrement) {
 }
 
 int scaleInt(int x, int from, int to) {
-  return (int)((to*1.0)/(from*1.0)*(x*1.0));
+  float mid = from/2.0;
+  return (int)((to*1.0)/(from*1.0)*(abs(x-mid)*1.0))*2;
 }
 
 void sendMIDI() {
@@ -130,13 +133,29 @@ void lcdPrint() {
       lcd.print("MIDI Channel: ");
       lcd.print(convertToTwoDigits(midiChannel));
       break;
-    default:
+    case 1:
+    case 2:
+    case 3:
       printCC(0, ccChannel[0], ccValue[0], encoderModeIndex == 1);
       printCC(5, ccChannel[1], ccValue[1], encoderModeIndex == 2);
       printCC(10, ccChannel[2], ccValue[2], encoderModeIndex == 3);
       break;
+    case 4:
+      printButtonNote();
+      lcd.setCursor(15,0);
+      lcd.print("*");
+      break;
+    default:
+      lcd.setCursor(0,0);
+      lcd.print("Funkstick");
   }
   dirty = false;
+}
+
+void printButtonNote() {
+      lcd.setCursor(0,0);
+      lcd.print("Button Note: ");
+      lcd.print(convertToThreeDigits(buttonNote));
 }
 
 void printCC(int position, int channel, int value, boolean selected) {
@@ -216,16 +235,31 @@ void printPosition(int x, int y, int z) {
 }
 
 void onJoystickButtonClicked() {
-    Serial.println("Joystick Clicked!");
+    if(joystickButtonCount == 10) {
+      onJoystickButtonHeld();
+    }
+}
+
+void onJoystickButtonHeld() {
+  Serial.println(noteOn);
+  if(noteOn) {
+    MIDI.sendNoteOff(buttonNote, 00, midiChannel);
+    noteOn = false;
+  } else {
+    MIDI.sendNoteOn(buttonNote, 127, midiChannel);
+    noteOn = true;
+  }
 }
 
 void onSelectionButtonClicked() {
-  Serial.println("Selection Clicked!");
-  encoderModeIndex = (encoderModeIndex + 1) % 4;
+  encoderModeIndex = (encoderModeIndex + 1) % 5;
 
   if(encoderModeIndex == 0) {
     ccSelectionEncoder.setUpperBound(16);
     ccSelectionEncoder.setLowerBound(1);
+  } if(encoderModeIndex < 5)  {
+    ccSelectionEncoder.setUpperBound(127);
+    ccSelectionEncoder.setLowerBound(0);
   } else {
     ccSelectionEncoder.setUpperBound(127);
     ccSelectionEncoder.setLowerBound(0);
@@ -250,13 +284,23 @@ bool isSelectionButtonClicked() {
 
 bool isJoystickButtonClicked() {
   int val = analogRead(JOYSTICK_BUTTON_PIN);
+
+  int z = analogRead(Z_PIN);
+  if(z < 512*.25 || z > 512*1.75) {
+    val = 500;
+  }
+
   if(val < 10 && joystickPressed == false) {
     joystickPressed = true;
     return true;
   } 
-  if(val >= 10) {
-    joystickPressed = false;
-  }
+  if(val < 10 && joystickPressed == true) {
+    joystickButtonCount++;
+    joystickPressed = true;
+    return true;
+  } 
+  joystickButtonCount = 0;
+  joystickPressed = false;
   return false;
 }
 
@@ -273,6 +317,9 @@ void rotateCCSelectionEncoder(ESPRotary& r) {
       break;
     case 3:
       ccChannel[2] = r.getPosition();
+      break;
+    case 4:
+      buttonNote = r.getPosition();
       break;
   }
   dirty = true;
